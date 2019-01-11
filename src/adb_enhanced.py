@@ -34,11 +34,11 @@ else:
 try:
     # This fails when the code is executed directly and not as a part of python package installation,
     # I definitely need a better way to handle this.
-    from adbe.adb_helper import execute_adb_command, execute_adb_shell_command
+    from adbe.adb_helper import execute_adb_command, execute_adb_command2, execute_adb_shell_command, execute_adb_shell_command2
     from adbe.output_helper import print_message, print_error, print_error_and_exit, print_verbose
 except ImportError:
     # This works when the code is executed directly.
-    from adb_helper import execute_adb_command, execute_adb_shell_command
+    from adb_helper import execute_adb_command, execute_adb_command2, execute_adb_shell_command, execute_adb_shell_command2
     from output_helper import print_message, print_error, print_error_and_exit, print_verbose
 
 
@@ -82,8 +82,8 @@ def ensure_package_exists3(func):
 
 def _package_exists(package_name):
     cmd = 'pm path %s' % package_name
-    response = execute_adb_shell_command(cmd)
-    return response is not None and len(response.strip()) != 0
+    return_code, response, _ = execute_adb_shell_command2(cmd)
+    return return_code == 0 and response is not None and len(response.strip()) != 0
 
 
 # Source:
@@ -195,8 +195,12 @@ def handle_airplane(turn_on):
     # At some version, this became a protected intent, so, it might require root to succeed.
     broadcast_change_cmd = 'am broadcast -a android.intent.action.AIRPLANE_MODE'
     broadcast_change_cmd = _may_be_wrap_with_run_as(broadcast_change_cmd, '')
-    execute_adb_shell_settings_command(cmd)
-    execute_adb_shell_command(broadcast_change_cmd)
+    execute_adb_shell_settings_command2(cmd)
+    return_code, _, _ = execute_adb_shell_command2(broadcast_change_cmd)
+    if return_code != 0:
+        print_error_and_exit('Failed to change airplane mode')
+    else:
+        print_message('Airplane mode changed successfully')
 
 
 # Source:
@@ -208,9 +212,17 @@ def handle_battery_saver(turn_on):
     else:
         cmd = 'put global low_power 0'
 
-    execute_adb_shell_command(get_battery_unplug_cmd())
-    execute_adb_shell_command(get_battery_discharging_cmd())
-    execute_adb_shell_settings_command(cmd)
+    if turn_on:
+        return_code, _, _ = execute_adb_shell_command2(get_battery_unplug_cmd())
+        if return_code != 0:
+            print_error_and_exit('Failed to unplug battery')
+        return_code, _, _ = execute_adb_shell_command2(get_battery_discharging_cmd())
+        if return_code != 0:
+            print_error_and_exit('Failed to put battery in discharge mode')
+
+    return_code, _, _ = execute_adb_shell_settings_command2(cmd)
+    if return_code != 0:
+        print_error_and_exit('Failed to modify battery saver mode')
 
 
 # Source:
@@ -314,9 +326,13 @@ def _is_app_running(app_name):
 
 
 def handle_list_devices():
-    s1 = execute_adb_command('devices -l')
+    cmd = 'devices -l'
+    return_code, stdout, stderr = execute_adb_command2(cmd)
+    if return_code != 0:
+        print_error_and_exit('Failed to execute command %s, error: %s ' % (cmd, stderr))
+
     # Skip the first line, it says "List of devices attached"
-    device_infos = s1.split('\n')[1:]
+    device_infos = stdout.split('\n')[1:]
 
     if len(device_infos) == 0 or (
             len(device_infos) == 1 and len(device_infos[0]) == 0):
@@ -417,13 +433,19 @@ def dump_ui(xml_file):
     cmd3 = 'rm %s' % tmp_file
 
     print_verbose('Writing UI to %s' % tmp_file)
-    execute_adb_shell_command(cmd1)
+    return_code, _, stderr = execute_adb_shell_command2(cmd1)
+    if return_code != 0:
+        print_error_and_exit('Failed to execute \"%s\", stderr: \"%s\"' % (cmd1, stderr))
+
     print_verbose('Pulling file %s' % xml_file)
-    execute_adb_command(cmd2)
+    return_code, _, stderr = execute_adb_command2(cmd2)
     print_verbose('Deleting file %s' % tmp_file)
-    print_message('XML UI dumped to %s, you might want to format it using \"xmllint --format %s\"' %
-                  (xml_file, xml_file))
     execute_adb_shell_command(cmd3)
+    if return_code != 0:
+        print_error_and_exit('Failed to fetch file %s' % tmp_file)
+    else:
+        print_message('XML UI dumped to %s, you might want to format it using \"xmllint --format %s\"' %
+                      (xml_file, xml_file))
 
 
 @ensure_package_exists
@@ -1006,7 +1028,11 @@ def push_file(local_file_path, remote_file_path):
     rm_cmd = 'rm %s' % tmp_file
     execute_adb_shell_command(rm_cmd)
 
-    execute_adb_command(push_cmd)
+    return_code, _, stderr = execute_adb_command2(push_cmd)
+    if return_code != 0:
+        print_error_and_exit('Failed to push file, error: %s' % stderr)
+        return
+
     execute_adb_shell_command(mv_cmd)
 
 
@@ -1207,7 +1233,11 @@ def print_app_signature(app_name):
     with tmp_apk_file:
         tmp_apk_file_name = tmp_apk_file.name
         adb_cmd = 'pull %s %s' % (apk_path, tmp_apk_file_name)
-        execute_adb_command(adb_cmd)
+        return_code, _, stderr = execute_adb_command2(adb_cmd)
+        if return_code != 0:
+            print_error_and_exit('Failed to pull file %s, stderr: %s' % (apk_path, stderr))
+            return
+
         dir_of_this_script = os.path.split(__file__)[0]
         apk_signer_jar_path = os.path.join(dir_of_this_script, 'apksigner.jar')
         if not os.path.exists(apk_signer_jar_path):
@@ -1283,13 +1313,17 @@ def perform_app_backup(app_name, backup_tar_file):
 def perform_install(file_path):
     print_verbose('Installing %s' % file_path)
     # -r: replace existing application
-    execute_adb_command('install -r %s' % file_path)
+    return_code, _, stderr = execute_adb_command2('install -r %s' % file_path)
+    if return_code != 0:
+        print_error('Failed to install %s, stderr: %s' % (file_path, stderr))
 
 
 @ensure_package_exists
 def perform_uninstall(app_name):
     print_verbose('Uninstalling %s' % app_name)
-    execute_adb_command('uninstall %s' % app_name)
+    return_code, _, stderr = execute_adb_command2('uninstall %s' % app_name)
+    if return_code != 0:
+        print_error('Failed to uninstall %s, stderr: %s' % (app_name, stderr))
 
 
 def _get_window_size():
@@ -1314,6 +1348,11 @@ def _perform_tap(x, y):
 def execute_adb_shell_settings_command(settings_cmd):
     _error_if_min_version_less_than(19)
     return execute_adb_shell_command('settings %s' % settings_cmd)
+
+
+def execute_adb_shell_settings_command2(settings_cmd):
+    _error_if_min_version_less_than(19)
+    return execute_adb_shell_command2('settings %s' % settings_cmd)
 
 
 def execute_adb_shell_settings_command_and_poke_activity_service(settings_cmd):
