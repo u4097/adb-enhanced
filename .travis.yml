@@ -89,28 +89,35 @@ matrix:
       env:
         global:
           - DX_HEAP_SIZE=2048
+          # androidtool needs this
+          - ANDROID_SDK_ROOT=$ANDROID_HOME
           # 16 is the fastest as per
           # https://medium.com/zendesk-engineering/speeding-up-android-builds-on-travis-ci-1bb4cdbd9c62
           - ANDROID_API_LEVEL=16
-          - ANDROID_EMU_API_LEVEL=22
-          - ANDROID_ABI=armeabi-v7a
+#          - ANDROID_EMU_API_LEVEL=22
+#          - ANDROID_ABI=armeabi-v7a
           - QEMU_AUDIO_DRV=none  # Remove audio
           - ADB_INSTALL_TIMEOUT=20  # minutes (2 minutes by default)
       android:
         components:
-          - tools
-          - platform-tools
-          - android-$ANDROID_API_LEVEL
-          - android-$ANDROID_EMU_API_LEVEL
-          # Specify at least one system image
-          - sys-img-$ANDROID_ABI-google_apis-$ANDROID_EMU_API_LEVEL
+#          - tools
+#          - platform-tools
+#          - android-$ANDROID_API_LEVEL
+#          - android-$ANDROID_EMU_API_LEVEL
+#          # Specify at least one system image
+#          - sys-img-$ANDROID_ABI-google_apis-$ANDROID_EMU_API_LEVEL
       before_script:
         # Python setup - for some weird reason, sudo is required here
         - sudo pip3 install -r requirements.txt
         # Android setup
-        - echo no | android create avd --force -n test -t android-$ANDROID_EMU_API_LEVEL --abi google_apis/$ANDROID_ABI
-        # -noaudio is not supported by this version of the emulator
-        - emulator -avd test -no-window -no-boot-anim &
+        - sudo pip3 install androidtool
+        - androidtool install basic packages
+        - androidtool install version $ANDROID_API_LEVEL --arm --no-google-apis
+        - androidtool create avd test $ANDROID_API_LEVEL --arm --no-google-apis
+        - androidtool start avd test --headless --verbose &
+#        - echo no | android create avd --force -n test -t android-$ANDROID_EMU_API_LEVEL --abi google_apis/$ANDROID_ABI
+#        # -noaudio is not supported by this version of the emulator
+#        - emulator -avd test -no-window -no-boot-anim &
         - android-wait-for-emulator
       script:
         - python3 -m pytest -v tests/adbe_tests.py  --durations=0
